@@ -556,13 +556,20 @@ $("retryHide").addEventListener("click", () => {
   updateRetryBar();
 });
 
-function translate(q) {
-  if (!/[\u4e00-\u9fa5]/.test(q)) return q;
-  const terms = [];
-  for (const [zh, en] of Object.entries(ZH_MAP)) {
-    if (q.includes(zh)) terms.push(en);
+/* 中英双语 → 查询词列表：中文按映射表翻译，英文原样保留，混合输入各自成组
+   返回最多 3 组查询（每组单独搜一次再合并结果，避免多词 AND 互相打架） */
+function translateQueries(q) {
+  const hasZh = /[\u4e00-\u9fa5]/.test(q);
+  const enPart = q.replace(/[\u4e00-\u9fa5]+/g, " ").replace(/\s+/g, " ").trim();
+  const queries = [];
+  if (hasZh) {
+    for (const [zh, en] of Object.entries(ZH_MAP)) {
+      if (q.includes(zh) && !queries.includes(en)) queries.push(en);
+    }
   }
-  return terms.length ? terms.join(" ") : q;
+  if (enPart && !queries.includes(enPart)) queries.push(enPart);
+  if (!queries.length) queries.push(q);
+  return queries.slice(0, 3);
 }
 
 function copyText(text) {
@@ -769,16 +776,24 @@ $("dCopyName").addEventListener("click", async () => { await copyText(`${dPrefix
 async function doSearch() {
   const raw = $("q").value.trim();
   if (!raw) return;
-  const q = translate(raw);
-  setStatus("", `搜索「${raw}」${q !== raw ? `→ ${q}` : ""}…`);
-  try {
-    const r = await apiFetch(`/search?query=${encodeURIComponent(q)}&limit=64`);
-    const data = await r.json();
-    renderSearchResults(data.icons || []);
+  const queries = translateQueries(raw);
+  setStatus("", `搜索「${raw}」${queries.length > 1 ? `（${queries.length} 组词）` : `→ ${queries[0]}`}…`);
+  const all = new Set();
+  let anyOk = false, lastErr = null;
+  for (const q of queries) {            // 顺序执行，避免并发触发限流
+    try {
+      const r = await apiFetch(`/search?query=${encodeURIComponent(q)}&limit=64`);
+      const data = await r.json();
+      (data.icons || []).forEach(i => all.add(i));
+      anyOk = true;
+    } catch (e) { lastErr = e; }
+  }
+  if (anyOk) {
+    renderSearchResults([...all]);
     $("searchTitle").scrollIntoView({ behavior: "smooth", block: "start" });
-    setStatus("ok", `搜索完成 · API ${apiBase.replace("https://", "")}`);
-  } catch (e) {
-    setStatus("warn", `搜索失败：${e.message}（检查网络）`);
+    setStatus("ok", `搜索完成（${queries.length} 组词 · 命中源 ${all.size} 个）· API ${apiBase.replace("https://", "")}`);
+  } else {
+    setStatus("warn", `搜索失败：${lastErr ? lastErr.message : "网络不通"}（检查网络）`);
     $("searchHint").style.display = "";
     $("searchHint").textContent = "搜索请求失败。Iconify API 需要网络；备用手动流程见插件 references/libraries/icon-search.md。";
   }
