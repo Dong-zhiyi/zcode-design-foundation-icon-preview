@@ -256,8 +256,8 @@
 </div>
 
 <main id="content" style="display:none">
-  <h2>常用图标 · 跨库对比</h2>
-  <p class="hint">同一概念在 11 个库里的形态对比。点任意卡片看大图、多尺寸与 SVG 源码。空白格 = 该库没有这个图标。</p>
+  <h2 id="presetHead">常用图标 · 跨库对比</h2>
+  <p class="hint" id="presetHint">同一概念在 11 个库里的形态对比。点任意卡片看大图、多尺寸与 SVG 源码。空白格 = 该库没有这个图标。</p>
   <div id="presets"></div>
 
   <h2 id="searchTitle" style="display:none">搜索结果</h2>
@@ -773,6 +773,13 @@ $("dCopyName").addEventListener("click", async () => { await copyText(`${dPrefix
 
 /* ============ 搜索 ============ */
 
+/* 预置示例区的显隐：搜索时隐藏（只看结果），「回到预置」恢复 */
+function showPresets(show) {
+  for (const id of ["presetHead", "presetHint", "presets"]) {
+    $(id).style.display = show ? "" : "none";
+  }
+}
+
 async function doSearch() {
   const raw = $("q").value.trim();
   if (!raw) return;
@@ -789,11 +796,12 @@ async function doSearch() {
     } catch (e) { lastErr = e; }
   }
   if (anyOk) {
+    showPresets(false);                 // 搜索成功：隐藏预置示例，只看结果
     renderSearchResults([...all]);
     $("searchTitle").scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus("ok", `搜索完成（${queries.length} 组词 · 命中源 ${all.size} 个）· API ${apiBase.replace("https://", "")}`);
   } else {
-    setStatus("warn", `搜索失败：${lastErr ? lastErr.message : "网络不通"}（检查网络）`);
+    setStatus("warn", `搜索失败：${lastErr ? lastErr.message : "网络不通"}（检查网络）`);   // 失败保留预置区可看
     $("searchHint").style.display = "";
     $("searchHint").textContent = "搜索请求失败。Iconify API 需要网络；备用手动流程见插件 references/libraries/icon-search.md。";
   }
@@ -806,6 +814,7 @@ $("reset").addEventListener("click", () => {
   $("searchTitle").style.display = "none";
   $("searchGrid").style.display = "none";
   $("searchHint").style.display = "none";
+  showPresets(true);                    // 恢复预置示例区
   $("presets").scrollIntoView({ behavior: "smooth" });
 });
 
