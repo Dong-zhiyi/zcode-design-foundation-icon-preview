@@ -69,6 +69,9 @@
     font-size: 14px; background: #fff; color: var(--ink);
   }
   .bar input[type=text]:focus { outline: none; border-color: var(--gold); }
+  .search-pair { flex: 1; min-width: 300px; display: flex; gap: 8px; align-items: center; }
+  .search-pair input[type=text] { flex: 1; min-width: 120px; }
+  .swap { font-size: 14px; color: var(--ink-3); flex: none; }
   .btn {
     padding: 9px 16px; border: 1px solid var(--accent); border-radius: 8px;
     background: var(--accent); color: #fff; font-size: 13px; cursor: pointer;
@@ -227,9 +230,18 @@
 </div>
 
 <div class="bar">
-  <input type="text" id="q" placeholder="输入关键词搜索，中英文都行：票 / ticket / 会员 / 优惠券 …" aria-label="搜索关键词">
+  <div class="search-pair">
+    <input type="text" id="qZh" placeholder="中文关键词：票 / 会员 / 优惠券 / 皇冠 …" aria-label="中文关键词">
+    <span class="swap" title="自动翻译联动">⇄</span>
+    <input type="text" id="qEn" placeholder="English: ticket / vip / discount / crown …" aria-label="English keywords" lang="en">
+  </div>
   <button class="btn" id="go">搜索</button>
   <button class="btn ghost" id="reset">回到预置</button>
+</div>
+
+<div class="bar" style="padding-top:10px; padding-bottom:10px;">
+  <span class="ctl">库筛选：</span>
+  <div class="chips" id="libChips"></div>
   <div class="ctl">
     尺寸 <input type="range" id="size" min="16" max="64" step="4" value="48" aria-label="图标尺寸">
     <span id="sizeVal">48px</span>
@@ -243,11 +255,6 @@
     <button class="sw" data-c="#3B82F6" style="background:#3B82F6" aria-label="蓝"></button>
     <span class="sw" style="background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red)" title="自定义颜色"><input type="color" id="custom" value="#111111" aria-label="自定义颜色"></span>
   </div>
-</div>
-
-<div class="bar" style="padding-top:10px; padding-bottom:10px;">
-  <span class="ctl">库筛选：</span>
-  <div class="chips" id="libChips"></div>
 </div>
 
 <div id="loading">
@@ -556,20 +563,57 @@ $("retryHide").addEventListener("click", () => {
   updateRetryBar();
 });
 
-/* 中英双语 → 查询词列表：中文按映射表翻译，英文原样保留，混合输入各自成组
-   返回最多 3 组查询（每组单独搜一次再合并结果，避免多词 AND 互相打架） */
-function translateQueries(q) {
-  const hasZh = /[\u4e00-\u9fa5]/.test(q);
-  const enPart = q.replace(/[\u4e00-\u9fa5]+/g, " ").replace(/\s+/g, " ").trim();
-  const queries = [];
-  if (hasZh) {
-    for (const [zh, en] of Object.entries(ZH_MAP)) {
-      if (q.includes(zh) && !queries.includes(en)) queries.push(en);
+/* 中英双框联动：任一侧输入，另一侧 350ms 后自动翻译填充（最后编辑的一侧为源） */
+function zhToEn(zh) {
+  const hits = [];
+  for (const [k, val] of Object.entries(ZH_MAP)) {
+    if (zh.includes(k)) hits.push(val);
+  }
+  return hits.length ? [...new Set(hits)].join(" ") : "";
+}
+function enToZh(en) {
+  const s = en.trim().toLowerCase();
+  if (!s) return "";
+  let best = null;
+  for (const [zh, val] of Object.entries(ZH_MAP)) {
+    const v = val.toLowerCase();
+    let score = 0;
+    if (v === s) score = 4;                                          // 完全相等
+    else if (v.split(/[\s,]+/).includes(s)) score = v.startsWith(s) ? 3 : 2;  // 单词命中，首词优先
+    else if (s.split(/\s+/).some(w => w && v.includes(w))) score = 1;         // 子串包含
+    if (score > 0 && (!best || score > best.score || (score === best.score && zh.length < best.zh.length))) {
+      best = { zh, score };
     }
   }
-  if (enPart && !queries.includes(enPart)) queries.push(enPart);
-  if (!queries.length) queries.push(q);
-  return queries.slice(0, 3);
+  return best ? best.zh : "";
+}
+let translateTimer = null;
+function scheduleTranslate(source) {
+  clearTimeout(translateTimer);
+  translateTimer = setTimeout(() => {
+    if (source === "zh") {
+      const en = zhToEn($("qZh").value);
+      if (en) $("qEn").value = en;
+    } else {
+      const zh = enToZh($("qEn").value);
+      if (zh) $("qZh").value = zh;
+    }
+  }, 350);
+}
+
+/* 双框取词：中文按映射拆成单词、英文按空格拆词，去重后逐组搜索再合并
+   （单词查询避免多词 AND 互相打架——「会员」→ vip / member / crown 各搜一次） */
+function buildQueries() {
+  const zh = $("qZh").value.trim(), en = $("qEn").value.trim();
+  const words = new Set();
+  if (zh) {
+    for (const [k, val] of Object.entries(ZH_MAP)) {
+      if (zh.includes(k)) val.split(/\s+/).forEach(w => words.add(w));
+    }
+  }
+  if (en) en.split(/\s+/).forEach(w => { if (/^[a-zA-Z0-9-]+$/.test(w)) words.add(w.toLowerCase()); });
+  if (!words.size && (zh || en)) words.add(zh || en);   // 无映射时原文兜底
+  return [...words].slice(0, 5);
 }
 
 function copyText(text) {
@@ -781,10 +825,10 @@ function showPresets(show) {
 }
 
 async function doSearch() {
-  const raw = $("q").value.trim();
-  if (!raw) return;
-  const queries = translateQueries(raw);
-  setStatus("", `搜索「${raw}」${queries.length > 1 ? `（${queries.length} 组词）` : `→ ${queries[0]}`}…`);
+  const queries = buildQueries();
+  if (!queries.length) return;
+  const label = [$("qZh").value.trim(), $("qEn").value.trim()].filter(Boolean).join(" / ");
+  setStatus("", `搜索「${label}」→ ${queries.join(" · ")}（${queries.length} 组词）…`);
   const all = new Set();
   let anyOk = false, lastErr = null;
   for (const q of queries) {            // 顺序执行，避免并发触发限流
@@ -808,9 +852,14 @@ async function doSearch() {
 }
 
 $("go").addEventListener("click", doSearch);
-$("q").addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
+[$("qZh"), $("qEn")].forEach(el => {
+  el.addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
+});
+$("qZh").addEventListener("input", () => scheduleTranslate("zh"));
+$("qEn").addEventListener("input", () => scheduleTranslate("en"));
 $("reset").addEventListener("click", () => {
-  $("q").value = "";
+  $("qZh").value = "";
+  $("qEn").value = "";
   $("searchTitle").style.display = "none";
   $("searchGrid").style.display = "none";
   $("searchHint").style.display = "none";
